@@ -401,6 +401,9 @@ static bool parse_config_file = true;
 static void ft_cleanup (void) __attribute__ ((destructor));
 static void ftpl_init (void) __attribute__ ((constructor));
 
+static int user_pipe_fd = -1;
+void flush_input_pipe();  // prototype.
+
 
 /*
  *      =======================================================================
@@ -3049,6 +3052,11 @@ static void ftpl_really_init(void)
     read_config_file();
   }
 
+  if (NULL != (tmp_env = getenv("FAKETIME_FROM_PIPE"))) {
+    user_pipe_fd = open(tmp_env, O_RDONLY | O_NONBLOCK);
+    fprintf(stderr, "READING FROM PIPE: %s %d\n", tmp_env, user_pipe_fd);
+  }
+
   dont_fake = dont_fake_final;
 }
 
@@ -3325,12 +3333,15 @@ int fake_clock_gettime(clockid_t clk_id, struct timespec *tp)
   struct timespec current_ts;
   DONT_FAKE_TIME((*real_clock_gettime)(CLOCK_REALTIME, &current_ts));
 
+  // If reading time strings from a pipe, don't expire the cache.
   if (last_data_fetch.tv_sec > 0)
   {
-    if ((current_ts.tv_sec - last_data_fetch.tv_sec) > cache_duration.tv_sec ||
-        ((current_ts.tv_sec - last_data_fetch.tv_sec) == cache_duration.tv_sec &&
-         (current_ts.tv_nsec - last_data_fetch.tv_nsec) > cache_duration.tv_nsec))
+    if (user_pipe_fd == -1 &&
+        ((current_ts.tv_sec - last_data_fetch.tv_sec) > cache_duration.tv_sec ||
+         ((current_ts.tv_sec - last_data_fetch.tv_sec) == cache_duration.tv_sec &&
+          (current_ts.tv_nsec - last_data_fetch.tv_nsec) > cache_duration.tv_nsec)))
     {
+      fprintf(stderr, "timeout");
       cache_expired = 1;
     }
     else
@@ -3341,14 +3352,19 @@ int fake_clock_gettime(clockid_t clk_id, struct timespec *tp)
 
   if (cache_enabled == 0)
   {
+    fprintf(stderr, "disabled");
     cache_expired = 1;
   }
 
   if (force_cache_expiration != 0)
   {
+    fprintf(stderr, "force_exp");
     cache_expired = 1;
     force_cache_expiration = 0;
   }
+
+  flush_input_pipe();
+
 
   if (cache_expired == 1)
   {
@@ -3357,8 +3373,8 @@ int fake_clock_gettime(clockid_t clk_id, struct timespec *tp)
     char *tmp_env;
 
     /* Can be enabled for testing ...
-      fprintf(stderr, "***************++ Cache expired ++************** %ld.%09ld\n", current_ts.tv_sec, current_ts.tv_nsec);
     */
+      fprintf(stderr, "***************++ Cache expired ++************** %ld.%09ld\n", current_ts.tv_sec, current_ts.tv_nsec);
 
     if (NULL != (tmp_env = getenv("FAKETIME")))
     {
@@ -4236,6 +4252,26 @@ void do_macos_dyld_interpose(void) {
 #endif
 }
 #endif
+
+void flush_input_pipe() {
+  static char user_faked_time[BUFFERLEN]; /* changed to static for caching in v0.6 */
+  ssize_t bytes;
+  ssize_t length = 0;
+  while ((bytes = read(user_pipe_fd, user_faked_time + length, sizeof(user_faked_time) - 1 - length)) > 0) {
+    length += bytes;
+    user_faked_time[length] = 0;
+    //fprintf(stderr, "++++GOT PIPE CHUNK++++ %s", user_faked_time);
+  }
+  if (bytes < 0) {
+    length = 0;
+  }
+  user_faked_time[length] = 0;
+  if (length > 0) {
+    fprintf(stderr, "++++GOT PIPE STRING++++ '%s'", user_faked_time);
+    parse_ft_string(user_faked_time);
+    fprintf(stderr, "Parsed pipe string");
+  }
+}
 
 /*
  * Editor modelines
