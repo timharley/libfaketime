@@ -361,7 +361,7 @@ static int fake_monotonic_clock = 0;
 static int fake_monotonic_clock = 1;
 #endif
 static int cache_enabled = 1;
-static int cache_duration = 10;     /* cache fake time input for 10 seconds */
+static struct timespec cache_duration = {10, 0};     /* cache fake time input for 10 seconds */
 static int force_cache_expiration = 0;
 
 /*
@@ -2833,8 +2833,15 @@ static void ftpl_really_init(void)
 
   if ((tmp_env = getenv("FAKETIME_CACHE_DURATION")) != NULL)
   {
-    cache_duration = atoi(tmp_env);
+    cache_duration.tv_sec = atoi(tmp_env);
   }
+  if ((tmp_env = getenv("FAKETIME_CACHE_DURATION_NS")) != NULL)
+  {
+    cache_duration.tv_nsec = atoi(tmp_env);
+  }
+  /*
+  fprintf(stderr, "Cache duration: %ld.%09ld", cache_duration.tv_sec, cache_duration.tv_nsec);
+  */
   if ((tmp_env = getenv("FAKETIME_NO_CACHE")) != NULL)
   {
     if (0 == strcmp(tmp_env, "1"))
@@ -3210,7 +3217,7 @@ int read_config_file()
 int fake_clock_gettime(clockid_t clk_id, struct timespec *tp)
 {
   /* variables used for caching, introduced in version 0.6 */
-  static time_t last_data_fetch = 0;  /* not fetched previously at first call */
+  static struct timespec last_data_fetch;  /* not fetched previously at first call */
   static int cache_expired = 1;       /* considered expired at first call */
 
   /* Karl Chan's v0.8 sanity check moved here for 0.9.9 */
@@ -3318,9 +3325,11 @@ int fake_clock_gettime(clockid_t clk_id, struct timespec *tp)
   struct timespec current_ts;
   DONT_FAKE_TIME((*real_clock_gettime)(CLOCK_REALTIME, &current_ts));
 
-  if (last_data_fetch > 0)
+  if (last_data_fetch.tv_sec > 0)
   {
-    if ((current_ts.tv_sec - last_data_fetch) > cache_duration)
+    if ((current_ts.tv_sec - last_data_fetch.tv_sec) > cache_duration.tv_sec ||
+        ((current_ts.tv_sec - last_data_fetch.tv_sec) == cache_duration.tv_sec &&
+         (current_ts.tv_nsec - last_data_fetch.tv_nsec) > cache_duration.tv_nsec))
     {
       cache_expired = 1;
     }
@@ -3348,7 +3357,7 @@ int fake_clock_gettime(clockid_t clk_id, struct timespec *tp)
     char *tmp_env;
 
     /* Can be enabled for testing ...
-      fprintf(stderr, "***************++ Cache expired ++**************\n");
+      fprintf(stderr, "***************++ Cache expired ++************** %ld.%09ld\n", current_ts.tv_sec, current_ts.tv_nsec);
     */
 
     if (NULL != (tmp_env = getenv("FAKETIME")))
@@ -3361,7 +3370,7 @@ int fake_clock_gettime(clockid_t clk_id, struct timespec *tp)
       snprintf(user_faked_time, BUFFERLEN, "+0");
     }
 
-    last_data_fetch = current_ts.tv_sec;
+    last_data_fetch = current_ts;
     /* fake time supplied as environment variable? */
     if (parse_config_file)
     {
