@@ -2498,8 +2498,8 @@ static void parse_ft_string(const char *user_faked_time)
       }
       else
       {
-        fprintf(stderr, "libfaketime: In parse_ft_string(), failed to parse FAKETIME timestamp.\n"
-                "Please check specification %s with format %s\n", user_faked_time, user_faked_time_fmt);
+        fprintf(stderr, "libfaketime: In parse_ft_string(), failed to parse FAKETIME timestamp in %p.\n"
+                "Please check specification '%s' with format %s\n", user_faked_time, user_faked_time, user_faked_time_fmt);
         exit(EXIT_FAILURE);
       }
       goto parse_modifiers;
@@ -3054,7 +3054,8 @@ static void ftpl_really_init(void)
 
   if (NULL != (tmp_env = getenv("FAKETIME_FROM_PIPE"))) {
     user_pipe_fd = open(tmp_env, O_RDONLY | O_NONBLOCK);
-    fprintf(stderr, "READING FROM PIPE: %s %d\n", tmp_env, user_pipe_fd);
+    fprintf(stderr, "%s READING FROM PIPE: %s fd=%d %s\n", progname, tmp_env,
+            user_pipe_fd, (user_pipe_fd == -1) ? strerror(errno) : "");
   }
 
   dont_fake = dont_fake_final;
@@ -3364,7 +3365,10 @@ int fake_clock_gettime(clockid_t clk_id, struct timespec *tp)
   }
 
   flush_input_pipe();
-
+  if (getenv("FAKETIME_DONT_FAKE") != NULL) {
+    ret = 0;
+    goto abort;
+  }
 
   if (cache_expired == 1)
   {
@@ -4259,17 +4263,23 @@ void flush_input_pipe() {
   ssize_t length = 0;
   while ((bytes = read(user_pipe_fd, user_faked_time + length, sizeof(user_faked_time) - 1 - length)) > 0) {
     length += bytes;
+    fprintf(stderr, "++++GOT PIPE CHUNK: %s ++++ %zd %zd\n", __progname, bytes, length);
     user_faked_time[length] = 0;
-    //fprintf(stderr, "++++GOT PIPE CHUNK++++ %s", user_faked_time);
+    fprintf(stderr, "++++GOT PIPE UPDATE++++ '%s'\n", user_faked_time);
+    if (user_faked_time[0] == 0 && length > 1) {
+      fprintf(stderr, "++++GOT PIPE WEIRDNESS++++ '%s'\n", &user_faked_time[1]);
+    }
   }
   if (bytes < 0) {
     length = 0;
   }
   user_faked_time[length] = 0;
   if (length > 0) {
-    fprintf(stderr, "++++GOT PIPE STRING++++ '%s'", user_faked_time);
-    parse_ft_string(user_faked_time);
-    fprintf(stderr, "Parsed pipe string");
+    fprintf(stderr, "++++GOT PIPE STRING++++ '%s' in %p\n", user_faked_time, user_faked_time);
+    int offset = 0;
+    while(user_faked_time[offset] == 0 && offset < length) ++offset;
+    parse_ft_string(&user_faked_time[offset]);
+    fprintf(stderr, "Parsed pipe string!\n");
   }
 }
 
