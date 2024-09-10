@@ -402,6 +402,7 @@ static void ft_cleanup (void) __attribute__ ((destructor));
 static void ftpl_init (void) __attribute__ ((constructor));
 
 static int user_pipe_fd = -1;
+static char user_pipe_filename[BUFSIZ];
 void flush_input_pipe();  // prototype.
 
 
@@ -640,6 +641,11 @@ static void ft_cleanup (void)
   }
 #endif
   if (shmCreator == true) ft_shm_destroy();
+
+  if (user_pipe_fd != -1 && remove(user_pipe_filename) != 0) {
+    fprintf(stderr, "libfaketime: In ft_cleanup(), removing input pipe failed: %s\n", strerror(errno));
+    exit(-1);
+  }
 }
 
 
@@ -3053,8 +3059,10 @@ static void ftpl_really_init(void)
   }
 
   if (NULL != (tmp_env = getenv("FAKETIME_FROM_PIPE"))) {
-    user_pipe_fd = open(tmp_env, O_RDONLY | O_NONBLOCK);
-    fprintf(stderr, "%s READING FROM PIPE: %s fd=%d %s\n", progname, tmp_env,
+    sprintf(user_pipe_filename, "%s/%d", tmp_env, getpid());
+    mkfifo(user_pipe_filename, 0666);
+    user_pipe_fd = open(user_pipe_filename, O_RDONLY | O_NONBLOCK);
+    fprintf(stderr, "%s READING FROM PIPE: %s fd=%d %s\n", progname, user_pipe_filename,
             user_pipe_fd, (user_pipe_fd == -1) ? strerror(errno) : "");
   }
 
@@ -3227,6 +3235,7 @@ int fake_clock_gettime(clockid_t clk_id, struct timespec *tp)
 {
   /* variables used for caching, introduced in version 0.6 */
   static struct timespec last_data_fetch;  /* not fetched previously at first call */
+  //static struct timespec last_config_modified;  /* not fetched previously at first call */
   static int cache_expired = 1;       /* considered expired at first call */
 
   /* Karl Chan's v0.8 sanity check moved here for 0.9.9 */
@@ -3353,7 +3362,7 @@ int fake_clock_gettime(clockid_t clk_id, struct timespec *tp)
 
   if (cache_enabled == 0)
   {
-    fprintf(stderr, "disabled");
+    //fprintf(stderr, "disabled");
     cache_expired = 1;
   }
 
@@ -3363,6 +3372,18 @@ int fake_clock_gettime(clockid_t clk_id, struct timespec *tp)
     cache_expired = 1;
     force_cache_expiration = 0;
   }
+  // char* file =getenv("FAKETIME_CACHE_FILE");
+  // if (file != NULL) {
+  //   struct stat filestat;
+  //   if(real_stat(file, &filestat) == 0) {
+  //     if (filestat.st_mtim.tv_sec != last_config_modified.tv_sec || filestat.st_mtim.tv_nsec != last_config_modified.tv_nsec) {
+  //       cache_expired = 1;
+  //       last_config_modified = filestat.st_mtim;
+  //       fprintf(stderr, "File modified at %ld.%ld\n", filestat.st_mtim.tv_sec,filestat.st_mtim.tv_nsec);
+  //     }
+  //   }
+  // }
+
 
   flush_input_pipe();
   if (getenv("FAKETIME_DONT_FAKE") != NULL) {
@@ -3377,8 +3398,8 @@ int fake_clock_gettime(clockid_t clk_id, struct timespec *tp)
     char *tmp_env;
 
     /* Can be enabled for testing ...
-    */
       fprintf(stderr, "***************++ Cache expired ++************** %ld.%09ld\n", current_ts.tv_sec, current_ts.tv_nsec);
+    */
 
     if (NULL != (tmp_env = getenv("FAKETIME")))
     {
