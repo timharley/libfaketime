@@ -401,6 +401,10 @@ static bool parse_config_file = true;
 static void ft_cleanup (void) __attribute__ ((destructor));
 static void ftpl_init (void) __attribute__ ((constructor));
 
+static int user_pipe_fd = -1;
+static char user_pipe_filename[BUFSIZ];
+void flush_input_pipe();  // prototype.
+
 
 /*
  *      =======================================================================
@@ -637,6 +641,11 @@ static void ft_cleanup (void)
   }
 #endif
   if (shmCreator == true) ft_shm_destroy();
+
+  if (user_pipe_fd != -1 && remove(user_pipe_filename) != 0) {
+    fprintf(stderr, "libfaketime: In ft_cleanup(), removing input pipe failed: %s\n", strerror(errno));
+    exit(-1);
+  }
 }
 
 
@@ -2496,7 +2505,7 @@ static void parse_ft_string(const char *user_faked_time)
       else
       {
         fprintf(stderr, "libfaketime: In parse_ft_string(), failed to parse FAKETIME timestamp.\n"
-                "Please check specification %s with format %s\n", user_faked_time, user_faked_time_fmt);
+                "Please check specification '%s' with format %s\n", user_faked_time, user_faked_time_fmt);
         exit(EXIT_FAILURE);
       }
       goto parse_modifiers;
@@ -3049,6 +3058,16 @@ static void ftpl_really_init(void)
     read_config_file();
   }
 
+  if (NULL != (tmp_env = getenv("FAKETIME_FROM_PIPE"))) {
+    sprintf(user_pipe_filename, "%s/%d", tmp_env, getpid());
+    mkfifo(user_pipe_filename, 0666);
+    user_pipe_fd = open(user_pipe_filename, O_RDONLY | O_NONBLOCK);
+    /*
+    fprintf(stderr, "%s READING FROM PIPE: %s fd=%d %s\n", progname, user_pipe_filename,
+            user_pipe_fd, (user_pipe_fd == -1) ? strerror(errno) : "");
+    */
+  }
+
   dont_fake = dont_fake_final;
 }
 
@@ -3325,11 +3344,13 @@ int fake_clock_gettime(clockid_t clk_id, struct timespec *tp)
   struct timespec current_ts;
   DONT_FAKE_TIME((*real_clock_gettime)(CLOCK_REALTIME, &current_ts));
 
+  // If reading time strings from a pipe, don't expire the cache.
   if (last_data_fetch.tv_sec > 0)
   {
-    if ((current_ts.tv_sec - last_data_fetch.tv_sec) > cache_duration.tv_sec ||
-        ((current_ts.tv_sec - last_data_fetch.tv_sec) == cache_duration.tv_sec &&
-         (current_ts.tv_nsec - last_data_fetch.tv_nsec) > cache_duration.tv_nsec))
+    if (user_pipe_fd == -1 &&
+        ((current_ts.tv_sec - last_data_fetch.tv_sec) > cache_duration.tv_sec ||
+         ((current_ts.tv_sec - last_data_fetch.tv_sec) == cache_duration.tv_sec &&
+          (current_ts.tv_nsec - last_data_fetch.tv_nsec) > cache_duration.tv_nsec)))
     {
       cache_expired = 1;
     }
@@ -3349,6 +3370,8 @@ int fake_clock_gettime(clockid_t clk_id, struct timespec *tp)
     cache_expired = 1;
     force_cache_expiration = 0;
   }
+
+  flush_input_pipe();
 
   if (cache_expired == 1)
   {
@@ -4236,6 +4259,26 @@ void do_macos_dyld_interpose(void) {
 #endif
 }
 #endif
+
+void flush_input_pipe() {
+  static char user_faked_time[BUFFERLEN]; /* changed to static for caching in v0.6 */
+  ssize_t bytes;
+  ssize_t length = 0;
+  while ((bytes = read(user_pipe_fd, user_faked_time + length, sizeof(user_faked_time) - 1 - length)) > 0) {
+    length += bytes;
+    user_faked_time[length] = 0;
+  }
+  if (bytes < 0) {
+    length = 0;
+  }
+  user_faked_time[length] = 0;
+  if (length > 0) {
+    /*
+    fprintf(stderr, "++++GOT PIPE STRING++++ '%s' in %p\n", user_faked_time, user_faked_time);
+    */
+    parse_ft_string(user_faked_time);
+  }
+}
 
 /*
  * Editor modelines
