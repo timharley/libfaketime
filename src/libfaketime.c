@@ -2642,9 +2642,10 @@ static void ftpl_really_init(void)
   char *tmp_env;
   bool dont_fake_final;
 
+
   /* moved up here from below the dlsym calls #130 */
   dont_fake = true; // Do not fake times during initialization
-  dont_fake_final = false;
+  dont_fake_final = getenv("DONT_FAKE_TIME") != NULL;
 
 #ifdef __APPLE__
   const char *progname = getprogname();
@@ -3195,7 +3196,7 @@ static void pthread_cleanup_mutex_lock(void *data)
 {
   struct LockedState *state = data;
   pthread_mutex_unlock(state->mutex);
-  pthread_sigmask(SIG_SETMASK, &state->original_mask, NULL);
+  //pthread_sigmask(SIG_SETMASK, &state->original_mask, NULL);
 }
 #endif
 
@@ -3267,7 +3268,8 @@ int fake_clock_gettime(clockid_t clk_id, struct timespec *tp)
   // block all signals while locked. prevents deadlocks if signal interrupts in in mid-operation.
   sigset_t all_signals, original_mask;
   sigfillset(&all_signals);
-  pthread_sigmask(SIG_SETMASK, &all_signals, &original_mask);
+  sigfillset(&original_mask);
+  //pthread_sigmask(SIG_SETMASK, &all_signals, &original_mask);
   pthread_mutex_lock(&time_mutex);
 
   struct LockedState state = { .mutex = &time_mutex, .original_mask = original_mask };
@@ -3343,11 +3345,15 @@ int fake_clock_gettime(clockid_t clk_id, struct timespec *tp)
 
   struct timespec current_ts;
   DONT_FAKE_TIME((*real_clock_gettime)(CLOCK_REALTIME, &current_ts));
+  //*tp = current_ts;
+  //return 0;
+
+
 
   // If reading time strings from a pipe, don't expire the cache.
   if (last_data_fetch.tv_sec > 0)
   {
-    if (user_pipe_fd == -1 &&
+    if (
         ((current_ts.tv_sec - last_data_fetch.tv_sec) > cache_duration.tv_sec ||
          ((current_ts.tv_sec - last_data_fetch.tv_sec) == cache_duration.tv_sec &&
           (current_ts.tv_nsec - last_data_fetch.tv_nsec) > cache_duration.tv_nsec)))
@@ -3371,18 +3377,22 @@ int fake_clock_gettime(clockid_t clk_id, struct timespec *tp)
     force_cache_expiration = 0;
   }
 
-  flush_input_pipe();
 
   if (cache_expired == 1)
   {
+    last_data_fetch = current_ts;
     static char user_faked_time[BUFFERLEN]; /* changed to static for caching in v0.6 */
     /* initialize with default or env. variable */
     char *tmp_env;
 
     /* Can be enabled for testing ...
       fprintf(stderr, "***************++ Cache expired ++************** %ld.%09ld\n", current_ts.tv_sec, current_ts.tv_nsec);
-    */
+     */
 
+
+    if (user_pipe_fd != -1) {
+      flush_input_pipe();
+    }
     if (NULL != (tmp_env = getenv("FAKETIME")))
     {
       strncpy(user_faked_time, tmp_env, BUFFERLEN - 1);
@@ -3393,7 +3403,6 @@ int fake_clock_gettime(clockid_t clk_id, struct timespec *tp)
       snprintf(user_faked_time, BUFFERLEN, "+0");
     }
 
-    last_data_fetch = current_ts;
     /* fake time supplied as environment variable? */
     if (parse_config_file)
     {
@@ -4276,7 +4285,8 @@ void flush_input_pipe() {
     /*
     fprintf(stderr, "++++GOT PIPE STRING++++ '%s' in %p\n", user_faked_time, user_faked_time);
     */
-    parse_ft_string(user_faked_time);
+    //parse_ft_string(user_faked_time);
+    setenv("FAKETIME", user_faked_time, 1);
   }
 }
 
