@@ -143,8 +143,8 @@ ifneq ($(PLATFORM),SunOS)
 LDFLAGS += -Wl,--version-script=libfaketime.map
 endif
 
-LDADD += -ldl -lm -lrt -lpthread
-BIN_LDFLAGS += -lrt -lpthread
+LDADD += -ldl -lm -lrt -lpthread -latomic
+BIN_LDFLAGS += -lrt -lpthread -latomic
 
 SRC = libfaketime.c
 LIBS_OBJ = libfaketime.o libfaketimeMT.o

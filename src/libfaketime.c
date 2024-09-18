@@ -24,7 +24,7 @@
 #define _GNU_SOURCE             /* required to get RTLD_NEXT defined */
 
 #define _LARGEFILE64_SOURCE 1   /* required for stat64 on musl */
-
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -381,7 +381,7 @@ static struct system_time_s ftpl_faketimecache = {{0, -1}, {0, -1}, {0, -1}, {0,
 static char user_faked_time_fmt[BUFSIZ] = {0};
 
 /* User supplied base time to fake */
-static struct timespec user_faked_time_timespec = {0, -1};
+static  struct timespec user_faked_time_timespec = {0, -1};
 /* User supplied base time is set */
 static bool user_faked_time_set = false;
 static char user_faked_time_saved[BUFFERLEN] = {0};
@@ -2200,6 +2200,7 @@ int timerfd_settime(int fd, int flags,
          const struct itimerspec *new_value,
          struct itimerspec *old_value)
 {
+  fprintf(stderr, "+++timerfd_settime\n");
   ftpl_init();
   if (real_timerfd_settime == NULL)
   {
@@ -2219,6 +2220,7 @@ int timerfd_settime(int fd, int flags,
  */
 int timerfd_gettime(int fd, struct itimerspec *curr_value)
 {
+  fprintf(stderr, "+++timerfd_gettime\n");
   ftpl_init();
   if (real_timerfd_gettime == NULL)
   {
@@ -2253,6 +2255,7 @@ time_t macos_time(time_t *time_tptr)
 time_t time(time_t *time_tptr)
 #endif
 {
+  fprintf(stderr, "+++time\n");
   struct timespec tp;
   time_t result;
 
@@ -2280,6 +2283,7 @@ int macos_ftime(struct timeb *tb)
 int ftime(struct timeb *tb)
 #endif
 {
+  fprintf(stderr, "+++ftime\n");
   struct timespec tp;
   int result;
 
@@ -2321,6 +2325,7 @@ int macos_gettimeofday(struct timeval *tv, void *tz)
 int gettimeofday(struct timeval *tv, void *tz)
 #endif
 {
+  fprintf(stderr, "+++gettimeofday\n");
   int result;
 
   ftpl_init();
@@ -2354,6 +2359,7 @@ int macos_clock_gettime(clockid_t clk_id, struct timespec *tp)
 int clock_gettime(clockid_t clk_id, struct timespec *tp)
 #endif
 {
+  fprintf(stderr, "+++clock_gettime\n");
   int result;
   static int recursion_depth = 0;
 
@@ -2434,6 +2440,7 @@ int macos_timespec_get(struct timespec *ts, int base)
 int timespec_get(struct timespec *ts, int base)
 #endif
 {
+  fprintf(stderr, "+++timespec_get\n");
   int result;
 
   ftpl_init();
@@ -3196,7 +3203,7 @@ static void pthread_cleanup_mutex_lock(void *data)
 {
   struct LockedState *state = data;
   pthread_mutex_unlock(state->mutex);
-  //pthread_sigmask(SIG_SETMASK, &state->original_mask, NULL);
+  pthread_sigmask(SIG_SETMASK, &state->original_mask, NULL);
 }
 #endif
 
@@ -3237,8 +3244,8 @@ int read_config_file()
 int fake_clock_gettime(clockid_t clk_id, struct timespec *tp)
 {
   /* variables used for caching, introduced in version 0.6 */
-  static struct timespec last_data_fetch;  /* not fetched previously at first call */
-  static int cache_expired = 1;       /* considered expired at first call */
+  static _Atomic struct timespec last_data_fetch_shared;  /* not fetched previously at first call */
+  int cache_expired = 1;       /* considered expired at first call */
 
   /* Karl Chan's v0.8 sanity check moved here for 0.9.9 */
   if (tp == NULL) return -1;
@@ -3261,20 +3268,6 @@ int fake_clock_gettime(clockid_t clk_id, struct timespec *tp)
 
   // {ret = value; goto abort;} to call matching pthread_cleanup_pop and return value
   volatile int ret = INT_MAX;
-
-#ifdef PTHREAD_SINGLETHREADED_TIME
-  static pthread_mutex_t time_mutex = PTHREAD_MUTEX_INITIALIZER;
-
-  // block all signals while locked. prevents deadlocks if signal interrupts in in mid-operation.
-  sigset_t all_signals, original_mask;
-  sigfillset(&all_signals);
-  sigfillset(&original_mask);
-  //pthread_sigmask(SIG_SETMASK, &all_signals, &original_mask);
-  pthread_mutex_lock(&time_mutex);
-
-  struct LockedState state = { .mutex = &time_mutex, .original_mask = original_mask };
-  pthread_cleanup_push(pthread_cleanup_mutex_lock, &state);
-#endif
 
   if ((limited_faking &&
      ((ft_start_after_ncalls != -1) || (ft_stop_after_ncalls != -1))) ||
@@ -3351,12 +3344,12 @@ int fake_clock_gettime(clockid_t clk_id, struct timespec *tp)
 
 
   // If reading time strings from a pipe, don't expire the cache.
-  if (last_data_fetch.tv_sec > 0)
   {
-    if (
-        ((current_ts.tv_sec - last_data_fetch.tv_sec) > cache_duration.tv_sec ||
+    // Atomic copy..
+    struct timespec last_data_fetch = last_data_fetch_shared;
+    if ((current_ts.tv_sec - last_data_fetch.tv_sec) > cache_duration.tv_sec ||
          ((current_ts.tv_sec - last_data_fetch.tv_sec) == cache_duration.tv_sec &&
-          (current_ts.tv_nsec - last_data_fetch.tv_nsec) > cache_duration.tv_nsec)))
+          (current_ts.tv_nsec - last_data_fetch.tv_nsec) > cache_duration.tv_nsec))
     {
       cache_expired = 1;
     }
@@ -3378,10 +3371,28 @@ int fake_clock_gettime(clockid_t clk_id, struct timespec *tp)
   }
 
 
+
+#ifdef PTHREAD_SINGLETHREADED_TIME
+  static pthread_mutex_t time_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+  // block all signals while locked. prevents deadlocks if signal interrupts in in mid-operation.
+  sigset_t all_signals, original_mask;
+  sigfillset(&all_signals);
+  sigemptyset(&original_mask);
+  struct LockedState state = { .mutex = &time_mutex, .original_mask = original_mask };
+#endif
+#ifdef PTHREAD_SINGLETHREADED_TIME
+  //{
+      pthread_mutex_lock(&time_mutex);
+      pthread_sigmask(SIG_SETMASK, &all_signals, &state.original_mask);
+      pthread_cleanup_push(pthread_cleanup_mutex_lock, &state);
+      //pthread_cleanup_pop(1);
+  //}
+#endif
   if (cache_expired == 1)
   {
-    last_data_fetch = current_ts;
-    static char user_faked_time[BUFFERLEN]; /* changed to static for caching in v0.6 */
+    last_data_fetch_shared = current_ts;
+    static __thread char user_faked_time[BUFFERLEN]; /* changed to static for caching in v0.6 */
     /* initialize with default or env. variable */
     char *tmp_env;
 
@@ -3573,6 +3584,7 @@ static int apple_clock_gettime(clockid_t clk_id, struct timespec *tp)
 
 int clock_get_time(clock_serv_t clock_serv, mach_timespec_t *cur_timeclockid_t)
 {
+  fprintf(stderr, "+++clock_get_time\n");
   int result;
   struct timespec ts;
 
@@ -3604,6 +3616,7 @@ int clock_get_time(clock_serv_t clock_serv, mach_timespec_t *cur_timeclockid_t)
 #ifdef FAKE_INTERNAL_CALLS
 int __gettimeofday(struct timeval *tv, void *tz)
 {
+  fprintf(stderr, "+++__gettimeday\n");
   int result;
 
   /* sanity check */
@@ -3628,6 +3641,7 @@ int __gettimeofday(struct timeval *tv, void *tz)
 
 int __clock_gettime(clockid_t clk_id, struct timespec *tp)
 {
+  fprintf(stderr, "+++__clock_gettime\n");
   int result;
 
   /* sanity check */
@@ -3662,6 +3676,7 @@ int __clock_gettime(clockid_t clk_id, struct timespec *tp)
 
 time_t __time(time_t *time_tptr)
 {
+  fprintf(stderr, "+++__time\n");
   struct timespec tp;
   time_t result;
 
@@ -3680,6 +3695,7 @@ time_t __time(time_t *time_tptr)
 
 int __ftime(struct timeb *tb)
 {
+  fprintf(stderr, "+++__ftime\n");
   struct timespec tp;
   int result;
 
@@ -3854,6 +3870,7 @@ bool needs_forced_monotonic_fix(char *function_name)
 
 int pthread_cond_timedwait_common(pthread_cond_t *cond, pthread_mutex_t *mutex, const struct timespec *abstime, ft_lib_compat_pthread compat)
 {
+  fprintf(stderr, "+++pthread_cond_timedwait_common\n");
   struct timespec tp, tdiff_actual, realtime, faketime;
   struct timespec *tf = NULL;
   struct pthread_cond_monotonic* e;
@@ -3947,11 +3964,13 @@ int pthread_cond_timedwait_common(pthread_cond_t *cond, pthread_mutex_t *mutex, 
 
 int pthread_cond_timedwait_225(pthread_cond_t *cond, pthread_mutex_t *mutex, const struct timespec *abstime)
 {
+  fprintf(stderr, "+++pthread_cond_timedwait_225\n");
   return pthread_cond_timedwait_common(cond, mutex, abstime, FT_COMPAT_GLIBC_2_2_5);
 }
 
 int pthread_cond_timedwait_232(pthread_cond_t *cond, pthread_mutex_t *mutex, const struct timespec *abstime)
 {
+  fprintf(stderr, "+++pthread_cond_timedwait_232\n");
   return pthread_cond_timedwait_common(cond, mutex, abstime, FT_COMPAT_GLIBC_2_3_2);
 }
 
@@ -3978,6 +3997,7 @@ int macos_clock_settime(clockid_t clk_id, const struct timespec *tp) {
 #else
 int clock_settime(clockid_t clk_id, const struct timespec *tp) {
 #endif
+  fprintf(stderr, "+++clock_settime\n");
 
   /* only CLOCK_REALTIME can be set */
   if (clk_id != CLOCK_REALTIME) {
@@ -4058,6 +4078,7 @@ int macos_settimeofday(const struct timeval *tv, void *tz)
 int settimeofday(const struct timeval *tv, void *tz)
 #endif
 {
+  fprintf(stderr, "+++settimeofday\n");
   /* The use of timezone *tz is obsolete and simply ignored here. */
   if (tz == NULL) tz = NULL;
 
@@ -4086,6 +4107,7 @@ int macos_adjtime (const struct timeval *delta, struct timeval *olddelta)
 int adjtime (const struct timeval *delta, struct timeval *olddelta)
 #endif
 {
+  fprintf(stderr, "+++adjtime\n");
   /* Always signal true full success when olddelta is requested. */
   if (olddelta != NULL)
   {
@@ -4270,7 +4292,7 @@ void do_macos_dyld_interpose(void) {
 #endif
 
 void flush_input_pipe() {
-  static char user_faked_time[BUFFERLEN]; /* changed to static for caching in v0.6 */
+  static __thread char user_faked_time[BUFFERLEN]; /* changed to static for caching in v0.6 */
   ssize_t bytes;
   ssize_t length = 0;
   while ((bytes = read(user_pipe_fd, user_faked_time + length, sizeof(user_faked_time) - 1 - length)) > 0) {
