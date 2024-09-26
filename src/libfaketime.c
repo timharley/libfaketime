@@ -3059,7 +3059,7 @@ static void ftpl_really_init(void)
   }
 
   if (NULL != (tmp_env = getenv("FAKETIME_FROM_PIPE"))) {
-    sprintf(user_pipe_filename, "%s/%d", tmp_env, getpid());
+    sprintf(user_pipe_filename, "%s/%d_%s", tmp_env, getpid(), progname);
     mkfifo(user_pipe_filename, 0666);
     user_pipe_fd = open(user_pipe_filename, O_RDONLY | O_NONBLOCK);
     /*
@@ -4260,24 +4260,41 @@ void do_macos_dyld_interpose(void) {
 }
 #endif
 
+// Function to read a line from a FIFO (potentially non-blocking)
+char *read_line_from_fifo(int fd) {
+  static char line[BUFFERLEN];
+  int i = 0;
+  char c;
+
+  while (1) {
+    ssize_t bytes_read = read(fd, &c, 1);
+
+    if (bytes_read > 0) {
+      line[i++] = c;
+      if (c == '\n') {
+        line[i] = '\0';
+        return line;
+      }
+    } else if (bytes_read == 0) {
+      // EOF (writer closed the pipe)
+      return NULL;
+    } else { // bytes_read < 0 (error)
+      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        // No data available, try again later
+        return NULL;
+      } else {
+        fprintf(stderr, "readline error %s\n", strerror(errno));
+      }
+    }
+  }
+}
+
 void flush_input_pipe() {
-  static char user_faked_time[BUFFERLEN]; /* changed to static for caching in v0.6 */
-  ssize_t bytes;
-  ssize_t length = 0;
-  while ((bytes = read(user_pipe_fd, user_faked_time + length, sizeof(user_faked_time) - 1 - length)) > 0) {
-    length += bytes;
-    user_faked_time[length] = 0;
+  char* line = NULL;
+  while((line = read_line_from_fifo(user_pipe_fd)) != NULL) {
+    parse_ft_string(line);
   }
-  if (bytes < 0) {
-    length = 0;
-  }
-  user_faked_time[length] = 0;
-  if (length > 0) {
-    /*
-    fprintf(stderr, "++++GOT PIPE STRING++++ '%s' in %p\n", user_faked_time, user_faked_time);
-    */
-    parse_ft_string(user_faked_time);
-  }
+  return;
 }
 
 /*
