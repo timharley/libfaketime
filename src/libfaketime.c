@@ -642,9 +642,12 @@ static void ft_cleanup (void)
 #endif
   if (shmCreator == true) ft_shm_destroy();
 
-  if (user_pipe_fd != -1 && remove(user_pipe_filename) != 0) {
-    fprintf(stderr, "libfaketime: In ft_cleanup(), removing input pipe failed: %s\n", strerror(errno));
-    exit(-1);
+  if (user_pipe_fd != -1) {
+    //fprintf(stderr, "libfaketime: In ft_cleanup(), removing: %s\n", user_pipe_filename);
+    if (close(user_pipe_fd) != 0 || remove(user_pipe_filename) != 0) {
+      fprintf(stderr, "libfaketime: In ft_cleanup(), closing & removing input pipe failed: %s\n", strerror(errno));
+      exit(-1);
+    }
   }
 }
 
@@ -3061,19 +3064,20 @@ static void ftpl_really_init(void)
   if (NULL != (tmp_env = getenv("FAKETIME_FROM_PIPE"))) {
     sprintf(user_pipe_filename, "%s/%d_%s", tmp_env, getpid(), progname);
     if(mkfifo(user_pipe_filename, 0666) != 0) {
-      fprintf(stderr, "Couldn't make fifo: %s\n", strerror(errno));
+      fprintf(stderr, "libfaketime: %s: Couldn't make fifo: %s\n", user_pipe_filename, strerror(errno));
     }
     // chmod to escape umask on created file permissions, otherwise fifo may not
     // be writeable.
     if(chmod(user_pipe_filename, 0666) != 0){
-      fprintf(stderr, "Couldn't chmod fifo: %s\n", strerror(errno));
+      fprintf(stderr, "libfaketime: %s: Couldn't chmod fifo: %s\n", user_pipe_filename, strerror(errno));
     }
     user_pipe_fd = open(user_pipe_filename, O_RDONLY | O_NONBLOCK);
     if (user_pipe_fd == -1) {
-      fprintf(stderr, "Couldn't open fifo: %s\n", strerror(errno));
+      fprintf(stderr, "libfaketime: %s: Couldn't open fifo: %s\n", user_pipe_filename, strerror(errno));
     }
+
     /*
-    fprintf(stderr, "%s READING FROM PIPE: %s fd=%d %s\n", progname, user_pipe_filename,
+    fprintf(stderr, "%s libfaketime READING FROM PIPE: %s fd=%d %s\n", progname, user_pipe_filename,
             user_pipe_fd, (user_pipe_fd == -1) ? strerror(errno) : "");
     */
   }
@@ -4293,7 +4297,7 @@ char *read_line_from_fifo(int fd) {
         // No data available, try again later
         return NULL;
       } else {
-        fprintf(stderr, "readline error %s\n", strerror(errno));
+        fprintf(stderr, "libfaketime: readline error %s\n", strerror(errno));
       }
     }
   }
