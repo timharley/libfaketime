@@ -3252,7 +3252,6 @@ int fake_clock_gettime(clockid_t clk_id, struct timespec *tp)
 {
   /* variables used for caching, introduced in version 0.6 */
   static struct timespec last_data_fetch;  /* not fetched previously at first call */
-  static struct timespec last_fake_time = {0, 0};
   static int cache_expired = 1;       /* considered expired at first call */
 
   /* Karl Chan's v0.8 sanity check moved here for 0.9.9 */
@@ -3495,6 +3494,34 @@ int fake_clock_gettime(clockid_t clk_id, struct timespec *tp)
       goto abort;
   } // end of switch(ft_mode)
 
+  static bool logged = false;
+  static struct timespec last_fake_time_mon = {0, 0};
+  static struct timespec last_fake_time_real = {0, 0};
+  struct timespec* last = NULL;
+  if (clk_id == CLOCK_MONOTONIC) {
+    last = &last_fake_time_mon;
+  } else if (clk_id == CLOCK_REALTIME) {
+    last = &last_fake_time_real;
+  }
+
+  if (last != NULL) {
+    if (last->tv_sec > tp->tv_sec ||
+        (last->tv_sec == tp->tv_sec && last->tv_nsec > tp->tv_nsec)) {
+      if (!logged) {
+        struct timespec diff;
+        timespecsub(last, tp, &diff);
+        fprintf(stderr, "%s libfaketime: preventing fakeclock %d going backwards! old %ld.%09ld > %ld.%09ld new (%ld.%09ld saved) (%ld.%09ld diff)\n",
+                __progname, clk_id, last->tv_sec, last->tv_nsec, tp->tv_sec, tp->tv_nsec, tp_save.tv_sec, tp_save.tv_nsec, diff.tv_sec
+                , diff.tv_nsec);
+        logged = true;
+      }
+      *tp = *last;
+    } else {
+      *last = *tp;
+      logged = false;
+    }
+  }
+
 abort:
 #ifdef PTHREAD_SINGLETHREADED_TIME
   pthread_cleanup_pop(1);
@@ -3502,19 +3529,6 @@ abort:
   // came here via goto abort?
   if (ret != INT_MAX) return ret;
   save_time(tp);
-  static bool logged = false;
-  if (last_fake_time.tv_sec > tp->tv_sec ||
-      (last_fake_time.tv_sec == tp->tv_sec && last_fake_time.tv_nsec > tp->tv_nsec)) {
-    if (!logged) {
-      fprintf(stderr, "libfaketime: preventing fakeclock going backwards! old %ld.%ld > %ld.%ld new\n",
-              last_fake_time.tv_sec, last_fake_time.tv_nsec, tp->tv_sec, tp->tv_nsec);
-      logged = true;
-    }
-    *tp = last_fake_time;
-  } else {
-    last_fake_time = *tp;
-    logged = false;
-  }
 
   /* Cache this most recent real and faked time we encountered */
   if (clk_id == CLOCK_REALTIME)
