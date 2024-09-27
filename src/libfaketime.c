@@ -3060,8 +3060,18 @@ static void ftpl_really_init(void)
 
   if (NULL != (tmp_env = getenv("FAKETIME_FROM_PIPE"))) {
     sprintf(user_pipe_filename, "%s/%d_%s", tmp_env, getpid(), progname);
-    mkfifo(user_pipe_filename, 0666);
+    if(mkfifo(user_pipe_filename, 0666) != 0) {
+      fprintf(stderr, "Couldn't make fifo: %s\n", strerror(errno));
+    }
+    // chmod to escape umask on created file permissions, otherwise fifo may not
+    // be writeable.
+    if(chmod(user_pipe_filename, 0666) != 0){
+      fprintf(stderr, "Couldn't chmod fifo: %s\n", strerror(errno));
+    }
     user_pipe_fd = open(user_pipe_filename, O_RDONLY | O_NONBLOCK);
+    if (user_pipe_fd == -1) {
+      fprintf(stderr, "Couldn't open fifo: %s\n", strerror(errno));
+    }
     /*
     fprintf(stderr, "%s READING FROM PIPE: %s fd=%d %s\n", progname, user_pipe_filename,
             user_pipe_fd, (user_pipe_fd == -1) ? strerror(errno) : "");
