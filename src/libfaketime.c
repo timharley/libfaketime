@@ -644,7 +644,8 @@ static void ft_cleanup (void)
 
   if (user_pipe_fd != -1) {
     //fprintf(stderr, "libfaketime: In ft_cleanup(), removing: %s\n", user_pipe_filename);
-    if (close(user_pipe_fd) != 0 || remove(user_pipe_filename) != 0) {
+    //if (close(user_pipe_fd) != 0 || remove(user_pipe_filename) != 0) {
+    if (remove(user_pipe_filename) != 0) {
       fprintf(stderr, "libfaketime: In ft_cleanup(), closing & removing input pipe failed: %s\n", strerror(errno));
       exit(-1);
     }
@@ -3251,6 +3252,7 @@ int fake_clock_gettime(clockid_t clk_id, struct timespec *tp)
 {
   /* variables used for caching, introduced in version 0.6 */
   static struct timespec last_data_fetch;  /* not fetched previously at first call */
+  static struct timespec last_fake_time = {0, 0};
   static int cache_expired = 1;       /* considered expired at first call */
 
   /* Karl Chan's v0.8 sanity check moved here for 0.9.9 */
@@ -3500,6 +3502,19 @@ abort:
   // came here via goto abort?
   if (ret != INT_MAX) return ret;
   save_time(tp);
+  static bool logged = false;
+  if (last_fake_time.tv_sec > tp->tv_sec ||
+      (last_fake_time.tv_sec == tp->tv_sec && last_fake_time.tv_nsec > tp->tv_nsec)) {
+    if (!logged) {
+      fprintf(stderr, "libfaketime: preventing fakeclock going backwards! old %ld.%ld > %ld.%ld new\n",
+              last_fake_time.tv_sec, last_fake_time.tv_nsec, tp->tv_sec, tp->tv_nsec);
+      logged = true;
+    }
+    *tp = last_fake_time;
+  } else {
+    last_fake_time = *tp;
+    logged = false;
+  }
 
   /* Cache this most recent real and faked time we encountered */
   if (clk_id == CLOCK_REALTIME)
@@ -4306,6 +4321,7 @@ char *read_line_from_fifo(int fd) {
 void flush_input_pipe() {
   char* line = NULL;
   while((line = read_line_from_fifo(user_pipe_fd)) != NULL) {
+    fprintf(stderr, "%s got line %s\n", __progname, line);
     parse_ft_string(line);
   }
   return;
